@@ -1,4 +1,5 @@
 using UnityEngine;
+using UISound;
 
 namespace Game
 {
@@ -14,6 +15,9 @@ namespace Game
         [SerializeField] Color popupColor = new Color(1f, 0.9f, 0.2f, 1f);
         [SerializeField] float popupDuration = 0.8f;
         [SerializeField] bool destroyOnPickup = true;
+        [SerializeField] bool playSound = true;
+        [SerializeField] InteractionSoundType soundType = InteractionSoundType.Coin;
+        [SerializeField] UIInteractionSoundManager soundManager;
 
         void Update()
         {
@@ -45,6 +49,11 @@ namespace Game
         public override void Interact(GameObject interactor)
         {
             var before = ScoreManager.Instance != null ? ScoreManager.Instance.CurrentScore : 0;
+            if (playSound)
+            {
+                if (soundManager == null) soundManager = FindFirstObjectByType<UIInteractionSoundManager>();
+                if (soundManager != null) soundManager.PlaySound(soundType, this);
+            }
             if (ScoreManager.Instance != null) ScoreManager.Instance.Add(scoreAmount);
             if (showPopup && PointsPopupSpawner.Instance != null)
             {
@@ -52,7 +61,12 @@ namespace Game
             }
             var after = ScoreManager.Instance != null ? ScoreManager.Instance.CurrentScore : before + scoreAmount;
             Debug.Log("DebugPickup: picked up by " + (interactor != null ? interactor.name : "null") + " score +" + scoreAmount + " " + before + "->" + after, this);
-            if (destroyOnPickup) Destroy(gameObject);
+            if (destroyOnPickup)
+            {
+                var vfx = GetComponent<Game.PickupShrinkPop>();
+                if (vfx != null) vfx.PlayAndDestroy();
+                else Destroy(gameObject);
+            }
         }
     }
 }

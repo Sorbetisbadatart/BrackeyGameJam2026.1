@@ -22,6 +22,25 @@ namespace UISound
         //sfx dictionary
         private Dictionary<InteractionSoundType, AudioClip> _soundFeedbacksDictionary = new Dictionary<InteractionSoundType, AudioClip>();
 
+        private void Reset()
+        {
+            audioSource = GetComponent<AudioSource>();
+
+            foreach (InteractionSoundType soundType in Enum.GetValues(typeof(InteractionSoundType)))
+            {
+                soundFeedback.Add(new SoundFeedback { soundType = soundType, soundClip = null });
+            }
+        }
+
+        private void Start()
+        {
+            foreach (var entry in soundFeedback)
+            {
+                _soundFeedbacksDictionary.Add(entry.soundType, entry.soundClip);
+            }
+        }
+
+
         public void PlaySound(InteractionSoundType soundType, UnityEngine.Object senderObject)
         {
             if (!_soundFeedbacksDictionary.TryGetValue(soundType, out var soundClip))
@@ -46,17 +65,6 @@ namespace UISound
             }
         }
 
-        private void Reset()
-        {
-            audioSource = GetComponent<AudioSource>();
-
-
-            foreach (InteractionSoundType soundType in Enum.GetValues(typeof(InteractionSoundType)))
-            {
-                soundFeedback.Add(new SoundFeedback { soundType = soundType, soundClip = null });
-            }
-
-
-        }
+       
     }
 }

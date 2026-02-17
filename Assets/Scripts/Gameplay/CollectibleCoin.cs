@@ -17,7 +17,15 @@ namespace Game
             {
                 PointsPopupSpawner.Instance.ShowPopup("+" + amount, transform.position, popupColor, popupDuration);
             }
-            Destroy(gameObject);
+            var vfx = GetComponent<Game.PickupShrinkPop>();
+            if (vfx != null)
+            {
+                vfx.PlayAndDestroy();
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
         }
 
         void OnTriggerEnter(Collider other)
