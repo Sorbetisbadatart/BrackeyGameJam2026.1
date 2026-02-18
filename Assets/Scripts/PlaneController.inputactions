@@ -1,0 +1,57 @@
+{
+    "version": 1,
+    "name": "PlaneController",
+    "maps": [
+        {
+            "name": "PlaneRotation",
+            "id": "d686b1ab-59df-45bf-818f-d5f7db0c62fe",
+            "actions": [
+                {
+                    "name": "RotateZ",
+                    "type": "Value",
+                    "id": "0ea2428e-d11b-49f9-be54-8c832f0fa14c",
+                    "expectedControlType": "Double",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": true
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "1D Axis",
+                    "id": "9e38edfa-2217-4177-be7f-86d5c8c9c157",
+                    "path": "1DAxis",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "RotateZ",
+                    "isComposite": true,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "negative",
+                    "id": "070a9ba1-01c8-4ea4-9cc6-1e3db49a6e10",
+                    "path": "<Keyboard>/z",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "RotateZ",
+                    "isComposite": false,
+                    "isPartOfComposite": true
+                },
+                {
+                    "name": "positive",
+                    "id": "6f8ad98e-5ffc-42d1-ba78-4f065b162a9c",
+                    "path": "<Keyboard>/c",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "RotateZ",
+                    "isComposite": false,
+                    "isPartOfComposite": true
+                }
+            ]
+        }
+    ],
+    "controlSchemes": []
+}
