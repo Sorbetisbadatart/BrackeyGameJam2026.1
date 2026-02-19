@@ -9,11 +9,7 @@ public class PlaneController : MonoBehaviour
     private float moveInput;
 
     public Transform player;
-    public float halfThickness = 1.5f;
-
-    static readonly int ID_Plane = Shader.PropertyToID("_WorldSlicePlane");
-    static readonly int ID_Thickness = Shader.PropertyToID("_SliceThickness");
-
+    public float sliceThickness = 0.2f;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -32,11 +28,15 @@ public class PlaneController : MonoBehaviour
 
     void LateUpdate()
     {
-        Vector3 normal = player.forward;
+        Vector3 normal = player.forward.normalized;
         float d = -Vector3.Dot(normal, player.position);
 
-        Shader.SetGlobalVector(ID_Plane, new Vector4(normal.x, normal.y, normal.z, d));
-        Shader.SetGlobalFloat(ID_Thickness, halfThickness);
+        Shader.SetGlobalVector(
+            "_WorldSlicePlane",
+            new Vector4(normal.x, normal.y, normal.z, d)
+        );
+
+        Shader.SetGlobalFloat("_SliceThickness", sliceThickness);
     }
 
     public void OnRotateZ(InputAction.CallbackContext context)
