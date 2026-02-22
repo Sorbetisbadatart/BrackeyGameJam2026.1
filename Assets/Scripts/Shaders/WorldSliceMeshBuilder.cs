@@ -1,272 +1,222 @@
+using System.Collections.Generic;
 using UnityEngine;
 
-// WorldSliceMeshBuilder
-// Attach to a cube of any position and scale. Every frame, rebuilds the mesh
-// as the intersection of the frustum and the cube in world space, with the
-// third axis solved from the slice plane equation using whichever component
-// of the plane normal is largest, to stay numerically stable at any rotation.
-//
+// Minimal world-slice mesh builder.
 // Setup:
-//   - Camera is a child of the Player, offset by -10 on local Z.
-//   - sliceDepth = 10 so the slice sits right at the player.
+//   1. Create an empty GameObject. Add this component.
+//   2. Add a Material to its MeshRenderer (anything, even Default-Material).
+//   3. Drag the MeshFilter of the object you want to slice into sourceMeshFilter.
+//   4. Assign targetCamera (or leave null for Camera.main).
+//   5. sliceDepth = distance in front of camera. Must place the plane INSIDE the mesh.
 
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
-public class WorldSliceMeshBuilder : MonoBehaviour
+public class WorldSliceMeshBuilderGeneric : MonoBehaviour
 {
-    [Header("References")]
-    [Tooltip("The camera that follows the player. Auto-found if null.")]
+    public MeshFilter sourceMeshFilter;
     public Camera targetCamera;
-
-    [Header("Slice Settings")]
-    [Tooltip("Distance in front of the camera to sample the frustum cross-section.")]
     public float sliceDepth = 10f;
 
-    MeshFilter _meshFilter;
     Mesh _mesh;
 
-    float _minX, _maxX;
-    float _minY, _maxY;
-    float _minZ, _maxZ;
+    readonly List<Vector3> _segA = new List<Vector3>();
+    readonly List<Vector3> _segB = new List<Vector3>();
+    readonly List<Vector3> _loop = new List<Vector3>();
+
+    // The source mesh is stored here so we can read it after the MeshFilter
+    // is repurposed to hold the output mesh.
+    Mesh _sourceMesh;
 
     void Awake()
     {
-        _meshFilter = GetComponent<MeshFilter>();
+        MeshFilter mf = GetComponent<MeshFilter>();
+
+        // Grab the original mesh BEFORE we overwrite the MeshFilter.
+        if (sourceMeshFilter == null)
+            sourceMeshFilter = mf;
+        _sourceMesh = sourceMeshFilter.sharedMesh;
 
         _mesh = new Mesh { name = "WorldSlice" };
         _mesh.MarkDynamic();
-        _meshFilter.mesh = _mesh;
-
-        Vector3 c = transform.position;
-        float hw = transform.lossyScale.x * 0.5f;
-        float hh = transform.lossyScale.y * 0.5f;
-        float hd = transform.lossyScale.z * 0.5f;
-
-        _minX = c.x - hw; _maxX = c.x + hw;
-        _minY = c.y - hh; _maxY = c.y + hh;
-        _minZ = c.z - hd; _maxZ = c.z + hd;
+        mf.mesh = _mesh; // replaces sharedMesh on this object
 
         if (targetCamera == null)
             targetCamera = Camera.main;
+
+        if (_sourceMesh == null)
+            Debug.LogError("[Slice] could not find a source mesh to slice.");
+        else
+            Debug.Log("[Slice] source mesh: " + _sourceMesh.name
+                + "  verts=" + _sourceMesh.vertexCount
+                + "  tris=" + (_sourceMesh.triangles.Length / 3));
     }
 
     void LateUpdate()
     {
-        if (targetCamera == null) return;
-        RebuildMesh();
-    }
+        _mesh.Clear();
 
-    void RebuildMesh()
-    {
-        Transform cam = targetCamera.transform;
+        if (targetCamera == null) { Debug.LogError("[Slice] no camera"); return; }
+        if (sourceMeshFilter == null) { Debug.LogError("[Slice] no sourceMeshFilter -- assign it in the Inspector"); return; }
 
-        Vector3 planeOrigin = cam.position + cam.forward * sliceDepth;
-        Vector3 planeNormal = cam.forward;
+        Mesh src = _sourceMesh;
+        if (src == null) { Debug.LogError("[Slice] sharedMesh is null"); return; }
 
-        // Pick the dominant axis of the plane normal to solve for.
-        // This keeps the divisor as large as possible and avoids divide-by-zero
-        // at any camera rotation (e.g. 90 deg Y where nz approaches 0).
-        float absX = Mathf.Abs(planeNormal.x);
-        float absY = Mathf.Abs(planeNormal.y);
-        float absZ = Mathf.Abs(planeNormal.z);
+        // -----------------------------------------------------------------
+        // 1. Slice plane
+        // -----------------------------------------------------------------
+        Vector3 planeOrigin = targetCamera.transform.position
+                            + targetCamera.transform.forward * sliceDepth;
+        Vector3 planeNormal = targetCamera.transform.forward;
 
-        int dominantAxis; // 0 = X, 1 = Y, 2 = Z
-        if (absX >= absY && absX >= absZ)
-            dominantAxis = 0;
-        else if (absY >= absX && absY >= absZ)
-            dominantAxis = 1;
-        else
-            dominantAxis = 2;
+        // -----------------------------------------------------------------
+        // 2. Triangle-plane intersections -> segments
+        // -----------------------------------------------------------------
+        Vector3[] sv = src.vertices;
+        int[] st = src.triangles;
+        Matrix4x4 l2w = sourceMeshFilter.transform.localToWorldMatrix;
 
-        // Get the two free axes (the ones we intersect in) and the solve axis.
-        // We always intersect the frustum and cube in the two free world axes,
-        // then solve the third from the plane equation.
-        int axis0, axis1; // free axes
-        GetFreeAxes(dominantAxis, out axis0, out axis1);
+        _segA.Clear();
+        _segB.Clear();
 
-        float freeMin0, freeMax0, freeMin1, freeMax1;
-        GetCubeBounds(axis0, out freeMin0, out freeMax0);
-        GetCubeBounds(axis1, out freeMin1, out freeMax1);
-
-        // Frustum extents in the two free axes.
-        Vector3 fBL = targetCamera.ViewportToWorldPoint(new Vector3(0, 0, sliceDepth));
-        Vector3 fBR = targetCamera.ViewportToWorldPoint(new Vector3(1, 0, sliceDepth));
-        Vector3 fTR = targetCamera.ViewportToWorldPoint(new Vector3(1, 1, sliceDepth));
-        Vector3 fTL = targetCamera.ViewportToWorldPoint(new Vector3(0, 1, sliceDepth));
-
-        float frustMin0 = Min4(GetAxis(fBL, axis0), GetAxis(fBR, axis0),
-                               GetAxis(fTR, axis0), GetAxis(fTL, axis0));
-        float frustMax0 = Max4(GetAxis(fBL, axis0), GetAxis(fBR, axis0),
-                               GetAxis(fTR, axis0), GetAxis(fTL, axis0));
-        float frustMin1 = Min4(GetAxis(fBL, axis1), GetAxis(fBR, axis1),
-                               GetAxis(fTR, axis1), GetAxis(fTL, axis1));
-        float frustMax1 = Max4(GetAxis(fBL, axis1), GetAxis(fBR, axis1),
-                               GetAxis(fTR, axis1), GetAxis(fTL, axis1));
-
-        // Intersect.
-        float iMin0 = Mathf.Max(frustMin0, freeMin0);
-        float iMax0 = Mathf.Min(frustMax0, freeMax0);
-        float iMin1 = Mathf.Max(frustMin1, freeMin1);
-        float iMax1 = Mathf.Min(frustMax1, freeMax1);
-
-        if (iMin0 >= iMax0 || iMin1 >= iMax1)
+        for (int i = 0; i < st.Length; i += 3)
         {
-            _mesh.Clear();
+            Vector3 wa = l2w.MultiplyPoint3x4(sv[st[i]]);
+            Vector3 wb = l2w.MultiplyPoint3x4(sv[st[i + 1]]);
+            Vector3 wc = l2w.MultiplyPoint3x4(sv[st[i + 2]]);
+
+            float da = Vector3.Dot(wa - planeOrigin, planeNormal);
+            float db = Vector3.Dot(wb - planeOrigin, planeNormal);
+            float dc = Vector3.Dot(wc - planeOrigin, planeNormal);
+
+            Vector3 p0 = Vector3.zero, p1 = Vector3.zero;
+            int found = 0;
+
+            if (da * db < 0f) { Lerp(wa, wb, da, db, ref p0, ref p1, ref found); }
+            if (db * dc < 0f) { Lerp(wb, wc, db, dc, ref p0, ref p1, ref found); }
+            if (dc * da < 0f) { Lerp(wc, wa, dc, da, ref p0, ref p1, ref found); }
+
+            if (found == 2)
+            {
+                _segA.Add(p0);
+                _segB.Add(p1);
+            }
+        }
+
+        // Diagnose misses: print plane pos vs mesh world bounds
+        Bounds meshWorldBounds = new Bounds(
+            l2w.MultiplyPoint3x4(src.bounds.center),
+            Vector3.zero);
+        Vector3 ext = src.bounds.extents;
+        // expand bounds by all 8 corners
+        for (int si = -1; si <= 1; si += 2)
+            for (int sj = -1; sj <= 1; sj += 2)
+                for (int sk = -1; sk <= 1; sk += 2)
+                    meshWorldBounds.Encapsulate(l2w.MultiplyPoint3x4(src.bounds.center
+                        + new Vector3(ext.x * si, ext.y * sj, ext.z * sk)));
+
+        Debug.Log("[Slice] segments=" + _segA.Count
+            + "  planeOrigin=" + planeOrigin.ToString("F2")
+            + "  meshBounds=" + meshWorldBounds.ToString()
+            + "  meshCenter=" + meshWorldBounds.center.ToString("F2")
+            + "  camPos=" + targetCamera.transform.position.ToString("F2")
+            + "  sliceDepth=" + sliceDepth);
+
+        if (_segA.Count < 2)
+        {
+            Debug.LogWarning("[Slice] plane missed mesh. "
+                + "Try setting sliceDepth to the distance from your camera to "
+                + meshWorldBounds.center.ToString("F2") + " which is ~"
+                + Vector3.Distance(targetCamera.transform.position, meshWorldBounds.center).ToString("F1"));
             return;
         }
 
-        // Build the four corners, solving the dominant axis from the plane equation.
-        Vector3 wBL = SolveVertex(iMin0, iMin1, axis0, axis1, dominantAxis, planeOrigin, planeNormal);
-        Vector3 wBR = SolveVertex(iMax0, iMin1, axis0, axis1, dominantAxis, planeOrigin, planeNormal);
-        Vector3 wTR = SolveVertex(iMax0, iMax1, axis0, axis1, dominantAxis, planeOrigin, planeNormal);
-        Vector3 wTL = SolveVertex(iMin0, iMax1, axis0, axis1, dominantAxis, planeOrigin, planeNormal);
+        // -----------------------------------------------------------------
+        // 3. Chain segments -> ordered loop
+        // -----------------------------------------------------------------
+        Chain(_segA, _segB, _loop);
+        Debug.Log("[Slice] loop pts=" + _loop.Count);
+        if (_loop.Count < 3) { Debug.LogWarning("[Slice] loop too small"); return; }
 
+        // -----------------------------------------------------------------
+        // 4. Fan-triangulate directly in WORLD space, upload as local coords
+        // -----------------------------------------------------------------
+        // Centroid
+        Vector3 centre = Vector3.zero;
+        for (int i = 0; i < _loop.Count; i++) centre += _loop[i];
+        centre /= _loop.Count;
+
+        int n = _loop.Count;
         Matrix4x4 w2l = transform.worldToLocalMatrix;
-        Vector3 vBL = w2l.MultiplyPoint3x4(wBL);
-        Vector3 vBR = w2l.MultiplyPoint3x4(wBR);
-        Vector3 vTR = w2l.MultiplyPoint3x4(wTR);
-        Vector3 vTL = w2l.MultiplyPoint3x4(wTL);
 
-        Vector3 localNormal = transform.InverseTransformDirection(-cam.forward).normalized;
+        // 2*n+2 verts: front-centre, front-ring, back-centre, back-ring
+        Vector3[] verts = new Vector3[2 * n + 2];
+        Vector3[] normals = new Vector3[2 * n + 2];
+        int[] tris = new int[n * 6];
 
-        _mesh.Clear();
+        Vector3 nF = transform.InverseTransformDirection(-planeNormal).normalized;
+        Vector3 nB = -nF;
 
-        _mesh.vertices = new Vector3[]
+        verts[0] = w2l.MultiplyPoint3x4(centre); normals[0] = nF; // front centre
+        verts[n + 1] = w2l.MultiplyPoint3x4(centre); normals[n + 1] = nB; // back centre
+
+        for (int i = 0; i < n; i++)
         {
-            vBL, vBR, vTR, vTL,
-            vBL, vBR, vTR, vTL,
-        };
+            verts[1 + i] = w2l.MultiplyPoint3x4(_loop[i]); normals[1 + i] = nF;
+            verts[n + 2 + i] = w2l.MultiplyPoint3x4(_loop[i]); normals[n + 2 + i] = nB;
+        }
 
-        _mesh.normals = new Vector3[]
+        int t = 0;
+        for (int i = 0; i < n; i++)
         {
-             localNormal,  localNormal,  localNormal,  localNormal,
-            -localNormal, -localNormal, -localNormal, -localNormal,
-        };
+            int a = 1 + i, b = 1 + (i + 1) % n;
+            // front
+            tris[t++] = 0; tris[t++] = a; tris[t++] = b;
+            // back
+            tris[t++] = n + 1; tris[t++] = n + 2 + (i + 1) % n; tris[t++] = n + 2 + i;
+        }
 
-        _mesh.triangles = new int[]
-        {
-            0, 3, 2,
-            0, 2, 1,
-            4, 5, 6,
-            4, 6, 7,
-        };
+        Debug.Log("[Slice] uploading verts=" + verts.Length + " tris=" + (tris.Length / 3));
 
-        _mesh.uv = new Vector2[]
-        {
-            new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1),
-            new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1),
-        };
-
+        _mesh.vertices = verts;
+        _mesh.normals = normals;
+        _mesh.triangles = tris;
         _mesh.RecalculateBounds();
     }
 
-    // Solves a world-space vertex given two free axis values and the plane equation.
-    Vector3 SolveVertex(float v0, float v1,
-                        int axis0, int axis1, int solveAxis,
-                        Vector3 planeOrigin, Vector3 planeNormal)
+    static void Lerp(Vector3 a, Vector3 b, float da, float db,
+                     ref Vector3 p0, ref Vector3 p1, ref int found)
     {
-        // Plane equation: dot(p - planeOrigin, planeNormal) = 0
-        // Expanded: n0*(a0 - o0) + n1*(a1 - o1) + ns*(as - os) = 0
-        // Solve for as: as = os - (n0*(a0-o0) + n1*(a1-o1)) / ns
-
-        float n0 = GetAxis(planeNormal, axis0);
-        float n1 = GetAxis(planeNormal, axis1);
-        float ns = GetAxis(planeNormal, solveAxis);
-        float o0 = GetAxis(planeOrigin, axis0);
-        float o1 = GetAxis(planeOrigin, axis1);
-        float os = GetAxis(planeOrigin, solveAxis);
-
-        float solvedValue = os - (n0 * (v0 - o0) + n1 * (v1 - o1)) / ns;
-
-        // Clamp the solved axis to the cube's bounds on that axis.
-        float cubeMin, cubeMax;
-        GetCubeBounds(solveAxis, out cubeMin, out cubeMax);
-        solvedValue = Mathf.Clamp(solvedValue, cubeMin, cubeMax);
-
-        Vector3 result = Vector3.zero;
-        SetAxis(ref result, axis0, v0);
-        SetAxis(ref result, axis1, v1);
-        SetAxis(ref result, solveAxis, solvedValue);
-        return result;
+        Vector3 p = Vector3.Lerp(a, b, da / (da - db));
+        if (found == 0) p0 = p; else p1 = p;
+        found++;
     }
 
-    void GetCubeBounds(int axis, out float min, out float max)
+    static void Chain(List<Vector3> A, List<Vector3> B, List<Vector3> loop)
     {
-        if (axis == 0) { min = _minX; max = _maxX; }
-        else if (axis == 1) { min = _minY; max = _maxY; }
-        else { min = _minZ; max = _maxZ; }
+        int n = A.Count;
+        bool[] used = new bool[n];
+        loop.Clear();
+
+        loop.Add(A[0]);
+        loop.Add(B[0]);
+        used[0] = true;
+        Vector3 tail = B[0];
+
+        for (int iter = 1; iter < n; iter++)
+        {
+            int best = -1; bool flip = false; float bd = float.MaxValue;
+            for (int i = 0; i < n; i++)
+            {
+                if (used[i]) continue;
+                float dA = (A[i] - tail).sqrMagnitude;
+                float dB = (B[i] - tail).sqrMagnitude;
+                if (dA < bd) { bd = dA; best = i; flip = false; }
+                if (dB < bd) { bd = dB; best = i; flip = true; }
+            }
+            if (best < 0) break;
+            used[best] = true;
+            Vector3 far = flip ? A[best] : B[best];
+            loop.Add(far);
+            tail = far;
+        }
     }
-
-    static void GetFreeAxes(int dominant, out int axis0, out int axis1)
-    {
-        if (dominant == 0) { axis0 = 1; axis1 = 2; }
-        else if (dominant == 1) { axis0 = 0; axis1 = 2; }
-        else { axis0 = 0; axis1 = 1; }
-    }
-
-    static float GetAxis(Vector3 v, int axis)
-    {
-        if (axis == 0) return v.x;
-        if (axis == 1) return v.y;
-        return v.z;
-    }
-
-    static void SetAxis(ref Vector3 v, int axis, float value)
-    {
-        if (axis == 0) v.x = value;
-        else if (axis == 1) v.y = value;
-        else v.z = value;
-    }
-
-    static float Min4(float a, float b, float c, float d)
-    {
-        return Mathf.Min(Mathf.Min(a, b), Mathf.Min(c, d));
-    }
-
-    static float Max4(float a, float b, float c, float d)
-    {
-        return Mathf.Max(Mathf.Max(a, b), Mathf.Max(c, d));
-    }
-
-#if UNITY_EDITOR
-    void OnDrawGizmosSelected()
-    {
-        if (!Application.isPlaying || targetCamera == null) return;
-
-        Transform cam = targetCamera.transform;
-        Vector3 planeOrigin = cam.position + cam.forward * sliceDepth;
-        Vector3 planeNormal = cam.forward;
-
-        float absX = Mathf.Abs(planeNormal.x);
-        float absY = Mathf.Abs(planeNormal.y);
-        float absZ = Mathf.Abs(planeNormal.z);
-
-        int dominant;
-        if (absX >= absY && absX >= absZ) dominant = 0;
-        else if (absY >= absX && absY >= absZ) dominant = 1;
-        else dominant = 2;
-
-        int axis0, axis1;
-        GetFreeAxes(dominant, out axis0, out axis1);
-
-        Gizmos.color = Color.yellow;
-        Vector3 gBL = SolveVertex(_minX, _minY, axis0, axis1, dominant, planeOrigin, planeNormal);
-        Vector3 gBR = SolveVertex(_maxX, _minY, axis0, axis1, dominant, planeOrigin, planeNormal);
-        Vector3 gTR = SolveVertex(_maxX, _maxY, axis0, axis1, dominant, planeOrigin, planeNormal);
-        Vector3 gTL = SolveVertex(_minX, _maxY, axis0, axis1, dominant, planeOrigin, planeNormal);
-        Gizmos.DrawLine(gBL, gBR);
-        Gizmos.DrawLine(gBR, gTR);
-        Gizmos.DrawLine(gTR, gTL);
-        Gizmos.DrawLine(gTL, gBL);
-
-        Gizmos.color = Color.cyan;
-        Vector3 bl = targetCamera.ViewportToWorldPoint(new Vector3(0, 0, sliceDepth));
-        Vector3 br = targetCamera.ViewportToWorldPoint(new Vector3(1, 0, sliceDepth));
-        Vector3 tr = targetCamera.ViewportToWorldPoint(new Vector3(1, 1, sliceDepth));
-        Vector3 tl = targetCamera.ViewportToWorldPoint(new Vector3(0, 1, sliceDepth));
-        Gizmos.DrawLine(bl, br);
-        Gizmos.DrawLine(br, tr);
-        Gizmos.DrawLine(tr, tl);
-        Gizmos.DrawLine(tl, bl);
-    }
-#endif
 }
