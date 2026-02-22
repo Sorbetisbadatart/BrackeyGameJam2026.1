@@ -4,8 +4,8 @@ namespace Game
 {
     public abstract class Interactable : MonoBehaviour, IInteractable
     {
-        [SerializeField] string prompt = "";
-        [SerializeField] bool isEnabled = true;
+        [SerializeField] private string prompt = "";
+        [SerializeField] protected bool isEnabled = true;
 
         public string Prompt => prompt;
 

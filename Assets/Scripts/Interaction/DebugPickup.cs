@@ -40,6 +40,11 @@ namespace Game
                         Debug.Log("DebugPickup: player not in range, distance=" + d, this);
                         return;
                     }
+                    if (!isEnabled)
+                    {
+                        Debug.Log("DebugPickup: Script is not enabled", this);
+                        return;
+                    }
                 }
                 Debug.Log("DebugPickup: manual pickup triggered by key " + pickupKey, this);
                 Interact(player);
